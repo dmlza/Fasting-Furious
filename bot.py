@@ -35,7 +35,6 @@ def format_duration(seconds):
         return f"{days}d {hours}h {minutes}m"
     return f"{hours}h {minutes}m"
 
-# Helper for secure db execution
 def run_query(query, params=(), fetch=False):
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
