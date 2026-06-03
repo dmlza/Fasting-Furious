@@ -79,7 +79,7 @@ async def stop_fast(message: types.Message):
     username = message.from_user.first_name
     
     rows = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
-    if rows:
+    if rows and len(rows) > 0:
         start_time = float(rows[0][0])
         elapsed = time.time() - start_time
         
