@@ -3,7 +3,7 @@ import time
 import random
 import os
 import psycopg2
-import psycopg2.extras  # Configured for clean dictionary row parsing
+import psycopg2.extras
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiohttp import web
@@ -39,7 +39,6 @@ def format_duration(seconds):
 # Helper for secure db execution with dictionary layout profiles
 def run_query(query, params=(), fetch=False):
     conn = psycopg2.connect(DATABASE_URL)
-    # Using RealDictCursor forces Python to read data by names instead of numbers
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(query, params)
     result = None
@@ -82,6 +81,7 @@ async def stop_fast(message: types.Message):
     
     rows = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
     if rows and len(rows) > 0:
+        # FIXED: Extracting index [0] from the list before grabbing the 'start_time' dictionary key
         start_time = float(rows[0]['start_time'])
         elapsed = time.time() - start_time
         
