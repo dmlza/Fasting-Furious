@@ -1,20 +1,21 @@
 import asyncio
 import time
 import random
-import os  # <-- ADDED FOR SECURITY
-import aiosqlite
+import os
+import psycopg2
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiohttp import web
 
-# Securely grab the token hidden in Render's environment settings
 TOKEN = os.environ.get("BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("Error: BOT_TOKEN environment variable is not set!")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if not TOKEN or not DATABASE_URL:
+    raise ValueError("Missing system configuration variables!")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Funny random affirmations and insults for the roulette wheel
 ROULETTE_PHRASES = [
     "🌟 AFFIRMATION: Look at you, surviving on nothing but water and sheer spite. Your fat cells are screaming in agony, begging for a single molecule of sugar. Let them burn. You are the master of this biological prison now.",
     "🍼 INSULT: I just calculated the trajectory of your willpower, and a single cookie will completely erase your dignity. Your fasting buddy is out-surviving you in sheer biological dominance. Don't be the first to weep.",
@@ -26,23 +27,6 @@ ROULETTE_PHRASES = [
     "🩸 DARK MOTIVATION: Every hour you survive without caving is another hour you prove your primitive caveman ancestors wouldn't be completely embarrassed by you. Don't let a marshmallow defeat you."
 ]
 
-# Set up clean database tables
-async def init_db():
-    async with aiosqlite.connect("final_fasting.db") as db:
-        # Active fasts table
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS fasters (
-                user_id INTEGER PRIMARY KEY, username TEXT, start_time REAL
-            )
-        """)
-        # Lifetime total fasting hours history table
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS history (
-                user_id INTEGER PRIMARY KEY, username TEXT, total_seconds REAL DEFAULT 0
-            )
-        """)
-        await db.commit()
-
 def format_duration(seconds):
     hours, remainder = divmod(int(seconds), 3600)
     minutes, _ = divmod(remainder, 60)
@@ -51,28 +35,33 @@ def format_duration(seconds):
         return f"{days}d {hours}h {minutes}m"
     return f"{hours}h {minutes}m"
 
-# --- 💧 CORE FASTING COMMANDS ---
+# Helper for secure db execution
+def run_query(query, params=(), fetch=False):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute(query, params)
+    result = None
+    if fetch:
+        result = cur.fetchall()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return result
 
 @dp.message(Command("fast"))
 async def start_fast(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.first_name
     
-    async with aiosqlite.connect("final_fasting.db") as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO fasters (user_id, username, start_time) VALUES (?, ?, ?)",
-            (user_id, username, time.time())
-        )
-        await db.commit()
-        
+    run_query(
+        "INSERT INTO fasters (user_id, username, start_time) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET start_time = EXCLUDED.start_time, username = EXCLUDED.username",
+        (user_id, username, time.time())
+    )
     await message.reply(f"🔒 **LOCK THE FRIDGE!**\n\n**{username}** has started their timer. The sugar-free clock is ticking! Type /status to check on each other.")
 
 @dp.message(Command("status"))
 async def check_status(message: types.Message):
-    async with aiosqlite.connect("final_fasting.db") as db:
-        async with db.execute("SELECT username, start_time FROM fasters") as cursor:
-            rows = await cursor.fetchall()
-            
+    rows = run_query("SELECT username, start_time FROM fasters", fetch=True)
     if not rows:
         return await message.reply("❌ Nobody is fasting right now. Did you both cave to the sugar demons? Type /fast immediately!")
         
@@ -80,7 +69,6 @@ async def check_status(message: types.Message):
     for username, start_time in rows:
         elapsed = time.time() - start_time
         response += f"• 👤 **{username}**: Fasting for `{format_duration(elapsed)}` 💧\n"
-    
     await message.reply(response)
 
 @dp.message(Command("stop"))
@@ -88,37 +76,22 @@ async def stop_fast(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.first_name
     
-    async with aiosqlite.connect("final_fasting.db") as db:
-        async with db.execute("SELECT start_time FROM fasters WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            
-        if row:
-            elapsed = time.time() - row[0]
-            await db.execute("DELETE FROM fasters WHERE user_id = ?", (user_id,))
-            
-            # Save to lifetime leaderboard history
-            await db.execute("""
-                INSERT INTO history (user_id, username, total_seconds) VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET total_seconds = total_seconds + ?
-            """, (user_id, username, elapsed, elapsed))
-            await db.commit()
-            
-            await message.reply(
-                f"🏁 **FAST BROKEN!**\n\n"
-                f"**{username}** tapped out after `{format_duration(elapsed)}`.\n"
-                f"Your milestone has been added to the /leaderboard!"
-            )
-        else:
-            await message.reply("You aren't even tracking an active fast! Type /fast first. 🙄")
-
-# --- 🏆 LIFETIME LEADERBOARD ---
+    row = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
+    if row:
+        elapsed = time.time() - row[0][0]
+        run_query("DELETE FROM fasters WHERE user_id = %s", (user_id,))
+        run_query("""
+            INSERT INTO history (user_id, username, total_seconds) VALUES (%s, %s, %s)
+            ON CONFLICT(user_id) DO UPDATE SET total_seconds = history.total_seconds + EXCLUDED.total_seconds
+        """, (user_id, username, elapsed))
+        
+        await message.reply(f"🏁 **FAST BROKEN!**\n\n**{username}** tapped out after `{format_duration(elapsed)}`.\nYour milestone has been added to the /leaderboard!")
+    else:
+        await message.reply("You aren't even tracking an active fast! Type /fast first. 🙄")
 
 @dp.message(Command("leaderboard"))
 async def show_leaderboard(message: types.Message):
-    async with aiosqlite.connect("final_fasting.db") as db:
-        async with db.execute("SELECT username, total_seconds FROM history ORDER BY total_seconds DESC") as cursor:
-            rows = await cursor.fetchall()
-            
+    rows = run_query("SELECT username, total_seconds FROM history ORDER BY total_seconds DESC", fetch=True)
     if not rows:
         return await message.reply("No historical records yet! Complete a fast and use /stop to get on the board.")
         
@@ -128,16 +101,26 @@ async def show_leaderboard(message: types.Message):
         response += f"{medal} **{username}**: Total record of `{format_duration(total_seconds)}` completed.\n"
     await message.reply(response)
 
-# --- 🎰 ROULETTE WHEEL ---
-
 @dp.message(Command("roulette"))
 async def phrase_roulette(message: types.Message):
     chosen_phrase = random.choice(ROULETTE_PHRASES)
     await message.reply(f"🎰 **ROULETTE SPIN RESULT:**\n\n{chosen_phrase}")
 
+# Simple web interface to trick Render's Web Service requirements
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
 async def main():
-    await init_db()
     print("Fasting Leaderboard & Roulette Bot is up and running...")
+    
+    # Run a simple parallel web server alongside the polling bot
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
+    asyncio.create_task(site.start())
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
