@@ -3,6 +3,7 @@ import time
 import random
 import os
 import psycopg2
+import psycopg2.extras  # Configured for clean dictionary row parsing
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiohttp import web
@@ -35,9 +36,11 @@ def format_duration(seconds):
         return f"{days}d {hours}h {minutes}m"
     return f"{hours}h {minutes}m"
 
+# Helper for secure db execution with dictionary layout profiles
 def run_query(query, params=(), fetch=False):
     conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
+    # Using RealDictCursor forces Python to read data by names instead of numbers
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(query, params)
     result = None
     if fetch:
@@ -66,8 +69,8 @@ async def check_status(message: types.Message):
         
     response = "📊 **CURRENT ACTIVE SUFFERING:**\n\n"
     for row in rows:
-        username = row[0]
-        start_time = float(row[1])
+        username = row['username']
+        start_time = float(row['start_time'])
         elapsed = time.time() - start_time
         response += f"• 👤 **{username}**: Fasting for `{format_duration(elapsed)}` 💧\n"
     await message.reply(response)
@@ -79,7 +82,7 @@ async def stop_fast(message: types.Message):
     
     rows = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
     if rows and len(rows) > 0:
-        start_time = float(rows[0][0])
+        start_time = float(rows[0]['start_time'])
         elapsed = time.time() - start_time
         
         run_query("DELETE FROM fasters WHERE user_id = %s", (user_id,))
@@ -100,8 +103,8 @@ async def show_leaderboard(message: types.Message):
         
     response = "🏆 **LIFETIME SUFFERING CHAMPIONS:**\n\n"
     for rank, row in enumerate(rows, 1):
-        username = row[0]
-        total_seconds = float(row[1])
+        username = row['username']
+        total_seconds = float(row['total_seconds'])
         medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "⭐"
         response += f"{medal} **{username}**: Total record of `{format_duration(total_seconds)}` completed.\n"
     await message.reply(response)
