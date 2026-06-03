@@ -66,7 +66,9 @@ async def check_status(message: types.Message):
         return await message.reply("❌ Nobody is fasting right now. Did you both cave to the sugar demons? Type /fast immediately!")
         
     response = "📊 **CURRENT ACTIVE SUFFERING:**\n\n"
-    for username, start_time in rows:
+    for row in rows:
+        username = row[0]
+        start_time = float(row[1])
         elapsed = time.time() - start_time
         response += f"• 👤 **{username}**: Fasting for `{format_duration(elapsed)}` 💧\n"
     await message.reply(response)
@@ -77,8 +79,8 @@ async def stop_fast(message: types.Message):
     username = message.from_user.first_name
     
     rows = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
-    if rows and len(rows) > 0:
-        start_time = rows[0][0]  # Safe tuple tracking structure
+    if rows:
+        start_time = float(rows[0][0])
         elapsed = time.time() - start_time
         
         run_query("DELETE FROM fasters WHERE user_id = %s", (user_id,))
@@ -98,7 +100,9 @@ async def show_leaderboard(message: types.Message):
         return await message.reply("No historical records yet! Complete a fast and use /stop to get on the board.")
         
     response = "🏆 **LIFETIME SUFFERING CHAMPIONS:**\n\n"
-    for rank, (username, total_seconds) in enumerate(rows, 1):
+    for rank, row in enumerate(rows, 1):
+        username = row[0]
+        total_seconds = float(row[1])
         medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "⭐"
         response += f"{medal} **{username}**: Total record of `{format_duration(total_seconds)}` completed.\n"
     await message.reply(response)
@@ -108,12 +112,10 @@ async def phrase_roulette(message: types.Message):
     chosen_phrase = random.choice(ROULETTE_PHRASES)
     await message.reply(f"🎰 **ROULETTE SPIN RESULT:**\n\n{chosen_phrase}")
 
-# Simple web interface to trick Render's Web Service requirements
 async def handle(request):
     return web.Response(text="Bot is running!")
 
 async def main():
-    # 1. Start web server immediately so Render marks the app healthy instantly
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
@@ -121,10 +123,7 @@ async def main():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"Web server online on port {port}")
     
-    # 2. Fire up the Telegram framework polling loop
-    print("Fasting Leaderboard & Roulette Bot is up and running...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
