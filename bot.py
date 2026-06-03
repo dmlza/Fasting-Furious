@@ -76,9 +76,11 @@ async def stop_fast(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.first_name
     
-    row = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
-    if row:
-        elapsed = time.time() - row[0][0]
+    rows = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
+    if rows and len(rows) > 0:
+        start_time = rows[0][0]  # Safe tuple tracking structure
+        elapsed = time.time() - start_time
+        
         run_query("DELETE FROM fasters WHERE user_id = %s", (user_id,))
         run_query("""
             INSERT INTO history (user_id, username, total_seconds) VALUES (%s, %s, %s)
@@ -111,16 +113,18 @@ async def handle(request):
     return web.Response(text="Bot is running!")
 
 async def main():
-    print("Fasting Leaderboard & Roulette Bot is up and running...")
-    
-    # Run a simple parallel web server alongside the polling bot
+    # 1. Start web server immediately so Render marks the app healthy instantly
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
-    asyncio.create_task(site.start())
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server online on port {port}")
     
+    # 2. Fire up the Telegram framework polling loop
+    print("Fasting Leaderboard & Roulette Bot is up and running...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
