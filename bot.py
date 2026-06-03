@@ -36,7 +36,6 @@ def format_duration(seconds):
         return f"{days}d {hours}h {minutes}m"
     return f"{hours}h {minutes}m"
 
-# Helper for secure db execution with dictionary layout profiles
 def run_query(query, params=(), fetch=False):
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -53,7 +52,6 @@ def run_query(query, params=(), fetch=False):
 async def start_fast(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.first_name
-    
     run_query(
         "INSERT INTO fasters (user_id, username, start_time) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET start_time = EXCLUDED.start_time, username = EXCLUDED.username",
         (user_id, username, time.time())
@@ -65,32 +63,28 @@ async def check_status(message: types.Message):
     rows = run_query("SELECT username, start_time FROM fasters", fetch=True)
     if not rows:
         return await message.reply("❌ Nobody is fasting right now. Did you both cave to the sugar demons? Type /fast immediately!")
-        
     response = "📊 **CURRENT ACTIVE SUFFERING:**\n\n"
     for row in rows:
-        username = row['username']
-        start_time = float(row['start_time'])
-        elapsed = time.time() - start_time
-        response += f"• 👤 **{username}**: Fasting for `{format_duration(elapsed)}` 💧\n"
+        u = row['username']
+        s = float(row['start_time'])
+        elapsed = time.time() - s
+        response += f"• 👤 **{u}**: Fasting for `{format_duration(elapsed)}` 💧\n"
     await message.reply(response)
 
 @dp.message(Command("stop"))
 async def stop_fast(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.first_name
-    
     rows = run_query("SELECT start_time FROM fasters WHERE user_id = %s", (user_id,), fetch=True)
     if rows and len(rows) > 0:
-        # FIXED: Extracting index [0] from the list before grabbing the 'start_time' dictionary key
-        start_time = float(rows[0]['start_time'])
-        elapsed = time.time() - start_time
-        
+        first_match = rows.pop(0)
+        s = float(first_match['start_time'])
+        elapsed = time.time() - s
         run_query("DELETE FROM fasters WHERE user_id = %s", (user_id,))
         run_query("""
             INSERT INTO history (user_id, username, total_seconds) VALUES (%s, %s, %s)
             ON CONFLICT(user_id) DO UPDATE SET total_seconds = history.total_seconds + EXCLUDED.total_seconds
         """, (user_id, username, elapsed))
-        
         await message.reply(f"🏁 **FAST BROKEN!**\n\n**{username}** tapped out after `{format_duration(elapsed)}`.\nYour milestone has been added to the /leaderboard!")
     else:
         await message.reply("You aren't even tracking an active fast! Type /fast first. 🙄")
@@ -100,13 +94,12 @@ async def show_leaderboard(message: types.Message):
     rows = run_query("SELECT username, total_seconds FROM history ORDER BY total_seconds DESC", fetch=True)
     if not rows:
         return await message.reply("No historical records yet! Complete a fast and use /stop to get on the board.")
-        
     response = "🏆 **LIFETIME SUFFERING CHAMPIONS:**\n\n"
     for rank, row in enumerate(rows, 1):
-        username = row['username']
-        total_seconds = float(row['total_seconds'])
+        u = row['username']
+        t = float(row['total_seconds'])
         medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "⭐"
-        response += f"{medal} **{username}**: Total record of `{format_duration(total_seconds)}` completed.\n"
+        response += f"{medal} **{u}**: Total record of `{format_duration(t)}` completed.\n"
     await message.reply(response)
 
 @dp.message(Command("roulette"))
@@ -125,7 +118,6 @@ async def main():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
